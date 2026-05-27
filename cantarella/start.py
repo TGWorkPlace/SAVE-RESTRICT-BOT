@@ -950,7 +950,7 @@ async def handle_restricted_content(
     # ── Edit progress message → Upload starting UI ────────────────────────
     try:
         await smsg.edit_text(
-            f"<b>{final_filename}</b></blockquote>\n"
+            f"<blockquote><b>{final_filename}</b></blockquote>\n"
             f"<blockquote><b>[□□□□□□□□□□□□] 0.0%</b></blockquote>\n"
             f"<blockquote><b>Processed: 0 B of {size_str}</b></blockquote>\n"
             f"<blockquote><b>Status: Upload | ETA: -</b></blockquote>\n"
