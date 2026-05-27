@@ -277,14 +277,14 @@ async def progress_callback(current, total, smsg, mode, start_time, task_key, fi
     display_user = user_name if user_name else task_key.split(':')[0]
 
     text = (
-        f"<b>{display_name}</b>\n"
-        f"┃ {bar} {percentage:.1f}%\n"
-        f"┠ Processed: {humanbytes(current)} of {humanbytes(total)}\n"
-        f"┠ Status: {status_label} | ETA: {eta_str}\n"
-        f"┠ Speed: {humanbytes(speed)}/s | Elapsed: {elapsed_str}\n"
-        f"┠ Engine: {'Aria2 v1.36.0' if mode == 'download' else 'PyroMulti v2.2.11'}\n"
-        f"┠ Mode:  #Leech | #{'Aria2' if mode == 'download' else 'TG'}\n"
-        f"┖ User: {display_user} | ID: {task_key.split(':')[0]}"
+        f"<blockquote><b>{display_name}</b></blockquote>\n"
+        f"<blockquote><b>{bar} {percentage:.1f}%</b></blockquote>\n"
+        f"<blockquote><b>Processed: {humanbytes(current)} of {humanbytes(total)}</b></blockquote>\n"
+        f"<blockquote><b>Status: {status_label} | ETA: {eta_str}</b></blockquote>\n"
+        f"<blockquote><b>Speed: {humanbytes(speed)}/s | Elapsed: {elapsed_str}</b></blockquote>\n"
+        f"<blockquote><b>Engine: {'Aria2 v1.36.0' if mode == 'download' else 'PyroMulti v2.2.11'}</b></blockquote>\n"
+        f"<blockquote><b>Mode:  #Leech | #{'Aria2' if mode == 'download' else 'TG'}</b></blockquote>\n"
+        f"<blockquote><b>User: {display_user} | ID: {task_key.split(':')[0]}</b></blockquote>"
     )
 
     cancel_markup = InlineKeyboardMarkup([[
@@ -818,14 +818,14 @@ async def handle_restricted_content(
 
     smsg = await client.send_message(
         message.chat.id,
-        f"<b>{display_name}</b>\n"
-        f"┃ [□□□□□□□□□□□□] 0.0%\n"
-        f"┠ Processed: 0 B of {humanbytes(file_size)}\n"
-        f"┠ Status: Download | ETA: -\n"
-        f"┠ Speed: 0.0 B/s | Elapsed: 0s\n"
-        f"┠ Engine: Aria2 v1.36.0\n"
-        f"┠ Mode:  #Leech | #Aria2\n"
-        f"┖ User: {display_user} | ID: {user_id}",
+        f"<blockquote><b>{display_name}</b></blockquote>\n"
+        f"<blockquote><b>[□□□□□□□□□□□□] 0.0%</b></blockquote>\n"
+        f"<blockquote><b>Processed: 0 B of {humanbytes(file_size)}</b></blockquote>\n"
+        f"<blockquote><b>Status: Download | ETA: -</b></blockquote>\n"
+        f"<blockquote><b>Speed: 0.0 B/s | Elapsed: 0s</b></blockquote>\n"
+        f"<blockquote><b>Engine: Aria2 v1.36.0</b></blockquote>\n"
+        f"<blockquote><b>Mode:  #Leech | #Aria2</b></blockquote>\n"
+        f"<blockquote><b>User: {display_user} | ID: {user_id}</b></blockquote>",
         reply_to_message_id=message.id,
         reply_markup=cancel_markup,
         parse_mode=enums.ParseMode.HTML
@@ -913,11 +913,11 @@ async def handle_restricted_content(
     # ── METADATA — edit progress message to show Metadata UI ─────────────
     try:
         await smsg.edit_text(
-            f"<b>{final_filename}</b>\n"
-            f"┠ Status: Metadata\n"
-            f"┠ Size: {size_str}\n"
-            f"┠ Engine: ffmpeg v4.4.2-0\n"
-            f"┖ User: {display_user} | ID: {user_id}",
+            f"<blockquote><b>{final_filename}</b></blockquote>\n"
+            f"<blockquote><b>Status: Metadata</b></blockquote>\n"
+            f"<blockquote><b>Size: {size_str}</b></blockquote>\n"
+            f"<blockquote><b>Engine: ffmpeg v4.4.2-0</b></blockquote>\n"
+            f"<blockquote><b>User: {display_user} | ID: {user_id}</b></blockquote>",
             reply_markup=cancel_markup,
             parse_mode=enums.ParseMode.HTML
         )
@@ -950,14 +950,14 @@ async def handle_restricted_content(
     # ── Edit progress message → Upload starting UI ────────────────────────
     try:
         await smsg.edit_text(
-            f"<b>{final_filename}</b>\n"
-            f"┃ [□□□□□□□□□□□□] 0.0%\n"
-            f"┠ Processed: 0 B of {size_str}\n"
-            f"┠ Status: Upload | ETA: -\n"
-            f"┠ Speed: 0.0 B/s | Elapsed: 0s\n"
-            f"┠ Engine: PyroMulti v2.2.11\n"
-            f"┠ Mode:  #Leech | #Aria2\n"
-            f"┖ User: {display_user} | ID: {user_id}",
+            f"<b>{final_filename}</b></blockquote>\n"
+            f"<blockquote><b>[□□□□□□□□□□□□] 0.0%</b></blockquote>\n"
+            f"<blockquote><b>Processed: 0 B of {size_str}</b></blockquote>\n"
+            f"<blockquote><b>Status: Upload | ETA: -</b></blockquote>\n"
+            f"<blockquote><b>Speed: 0.0 B/s | Elapsed: 0s</b></blockquote>\n"
+            f"<blockquote><b>Engine: PyroMulti v2.2.11</b></blockquote>\n"
+            f"<blockquote><b>Mode:  #Leech | #Aria2</b></blockquote>\n"
+            f"<blockquote><b>User: {display_user} | ID: {user_id}</b></blockquote>",
             reply_markup=cancel_markup,
             parse_mode=enums.ParseMode.HTML
         )
