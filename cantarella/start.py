@@ -553,7 +553,7 @@ async def save(client: Client, message: Message):
     user_name = message.from_user.first_name or str(user_id)
 
     # Limit check (skip in groups — limits are per-user in private chats)
-    if filters.private(None, message):
+    if await filters.private(None, message):
         is_limit_reached = await db.check_limit(user_id)
         if is_limit_reached:
             btn = InlineKeyboardMarkup([[InlineKeyboardButton("💎 Upgrade to Premium", callback_data="buy_premium")]])
