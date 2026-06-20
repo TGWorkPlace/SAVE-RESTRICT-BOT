@@ -37,9 +37,44 @@ async def start_health_server():
     app.router.add_get("/health", health_handler)
     runner = web.AppRunner(app)
     await runner.setup()
-    site = web.TCPSite(runner, "0.0.0.0", 8080)
+    port = int(os.environ.get("PORT", 8080))
+    site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
-    logger.info("Health check server running on port 8080")
+    logger.info(f"Health check server running on port {port}")
+
+# ─── Watchdog ───────────────────────────────────────────────────────────────
+
+async def watchdog(bot: "Bot", interval: int = 300, max_failures: int = 3):
+    """
+    Pings Telegram every `interval` seconds.
+    If `max_failures` consecutive pings fail, forces a process restart so
+    Koyeb can bring the container back up cleanly.
+    """
+    from pyrogram import raw
+    failures = 0
+    await asyncio.sleep(60)  # grace period after startup
+    while True:
+        try:
+            await asyncio.wait_for(
+                bot.invoke(raw.functions.Ping(ping_id=0)),
+                timeout=30
+            )
+            failures = 0
+            logger.debug("Watchdog ping OK")
+        except Exception as e:
+            failures += 1
+            logger.warning(f"Watchdog ping failed ({failures}/{max_failures}): {e}")
+            if failures >= max_failures:
+                logger.error("Watchdog: session unrecoverable — forcing process exit for Koyeb restart.")
+                try:
+                    await bot.send_message(
+                        LOG_CHANNEL,
+                        "⚠️ <b>Watchdog detected dead session. Restarting...</b>"
+                    )
+                except Exception:
+                    pass
+                os._exit(1)
+        await asyncio.sleep(interval)
 
 # ────────────────────────────────────────────────────────────────────────────
 
@@ -51,23 +86,24 @@ class Bot(Client):
             api_hash=API_HASH,
             bot_token=BOT_TOKEN,
             plugins=dict(root="cantarella"),
-            workers=10,
+            workers=4,                    # reduced from 10 — fewer concurrent readers = less race risk
             sleep_threshold=15,
-            max_concurrent_transmissions=5,
+            max_concurrent_transmissions=2,  # reduced from 5
             ipv6=False,
             in_memory=False,
         )
+        self._watchdog_task: asyncio.Task | None = None
 
     async def start(self):
         print(LOGO)
 
-        # 1. Start health check server on port 8080 for Koyeb
+        # 1. Start health check server
         try:
             await start_health_server()
         except Exception as e:
             logger.warning(f"Health server failed to start: {e}")
 
-        # 2. Resilient Login Loop with FloodWait handling
+        # 2. Resilient login loop
         while True:
             try:
                 await super().start()
@@ -102,7 +138,6 @@ class Bot(Client):
             f"<b>Time:</b> <code>{now.strftime('%I:%M %p')} IST</code>\n\n"
             f"<b>Developed by @cantarellabots</b>"
         )
-
         try:
             await self.send_message(LOG_CHANNEL, startup_text)
             logger.info("Startup log sent.")
@@ -111,14 +146,26 @@ class Bot(Client):
 
         await self.set_bot_commands_list()
 
+        # 6. Start watchdog AFTER everything else is ready
+        self._watchdog_task = asyncio.create_task(watchdog(self))
+        logger.info("Watchdog started.")
+
     async def stop(self, *args):
-        # Stop pyrogram → Telegram log forwarding before shutting down
+        # Cancel watchdog first so it doesn't fire during shutdown
+        if self._watchdog_task and not self._watchdog_task.done():
+            self._watchdog_task.cancel()
+            try:
+                await self._watchdog_task
+            except asyncio.CancelledError:
+                pass
+
         stop_telegram_logging()
 
         try:
             await self.send_message(LOG_CHANNEL, "<b><i>❌ Bot is going Offline</i></b>")
-        except:
+        except Exception:
             pass
+
         await asyncio.shield(super().stop())
         logger.info("Bot stopped cleanly")
 
@@ -167,7 +214,7 @@ async def new_user_log(bot: Client, message: Message):
         )
         try:
             await bot.send_message(LOG_CHANNEL, log_text)
-        except:
+        except Exception:
             pass
 
     USER_CACHE.add(user.id)
