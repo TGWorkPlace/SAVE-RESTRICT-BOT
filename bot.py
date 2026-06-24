@@ -31,10 +31,29 @@ LOGO = r"""
 async def health_handler(request):
     return web.Response(text="OK", status=200)
 
-async def start_health_server():
+async def restart_handler(request):
+    logger.info("Restart triggered via HTTP /restart endpoint")
+    # Schedule the restart after sending the response so the client gets a reply
+    async def _do_restart():
+        await asyncio.sleep(1)
+        try:
+            await request.app["bot_instance"].send_message(
+                LOG_CHANNEL,
+                "🔄 <b>Bot is restarting via HTTP /restart endpoint...</b>"
+            )
+        except Exception:
+            pass
+        os.execl(sys.executable, sys.executable, *sys.argv)
+
+    asyncio.create_task(_do_restart())
+    return web.Response(text="Restarting bot...", status=200)
+
+async def start_health_server(bot_instance):
     app = web.Application()
+    app["bot_instance"] = bot_instance
     app.router.add_get("/", health_handler)
     app.router.add_get("/health", health_handler)
+    app.router.add_get("/restart", restart_handler)
     runner = web.AppRunner(app)
     await runner.setup()
     port = int(os.environ.get("PORT", 8080))
@@ -97,9 +116,9 @@ class Bot(Client):
     async def start(self):
         print(LOGO)
 
-        # 1. Start health check server
+        # 1. Start health check server (pass self so /restart can notify LOG_CHANNEL)
         try:
-            await start_health_server()
+            await start_health_server(self)
         except Exception as e:
             logger.warning(f"Health server failed to start: {e}")
 
