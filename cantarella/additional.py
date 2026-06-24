@@ -22,6 +22,7 @@ WORDS_TO_REMOVE = [
     "ADL_DRAMA",
     "ADL",
     "MABLG",
+    "[MABLG]."
     "[DnO]",
 ]
 
