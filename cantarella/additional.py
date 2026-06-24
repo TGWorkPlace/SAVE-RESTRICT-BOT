@@ -15,14 +15,12 @@ import aiohttp
 WORDS_TO_REMOVE = [
     "@ADL_DRAMA",
     "#ADL",
-    "[MABLG]",
+    "[MABLG].",
     "@DA_RIPS",
     "@Da_Rips",
     "DA_Rips",
     "ADL_DRAMA",
     "ADL",
-    "MABLG",
-    "[MABLG]."
     "[DnO]",
 ]
 
