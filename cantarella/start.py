@@ -60,7 +60,7 @@ if (
 
 
 # ===========================================================================
-# Custom exception for cancellation (ported from Code 1)
+# Custom exception for cancellation
 # ===========================================================================
 
 class ProcessCancelled(Exception):
@@ -69,25 +69,17 @@ class ProcessCancelled(Exception):
 
 
 # ===========================================================================
-# Task registry — supports both private chats and groups
-# Each active task is keyed by "user_id:chat_id" so multiple users in
-# different groups can run independently (same approach as Code 1).
+# Task registry
 # ===========================================================================
 
 class batch_temp(object):
-    IS_BATCH      = {}   # True  → no active task (slot is free)
-                         # False → task is running
-    CANCEL_TASKS  = {}   # True  → cancellation requested
-    DOWNLOAD_TASKS = {}  # asyncio.Task references for in-flight downloads
-    ACTIVE_SESSIONS = {} # reusable pyrogram Client objects per user
+    IS_BATCH       = {}   # True  → slot free, False → task running
+    CANCEL_TASKS   = {}   # True  → cancellation requested
+    DOWNLOAD_TASKS = {}   # asyncio.Task references for in-flight downloads
+    ACTIVE_SESSIONS = {}  # reusable pyrogram Client objects per user
 
 
 def get_task_key(user_id: int, chat_id: int) -> str:
-    """
-    Build a unique task key for (user, chat) pair.
-    • Private chat  → user_id == chat_id  → "uid:uid"  (backward-compat)
-    • Group / super → different ids        → "uid:cid"
-    """
     return f"{user_id}:{chat_id}"
 
 
@@ -211,10 +203,6 @@ def get_message_type(msg):
 
 
 def make_progress_bar(percentage: float) -> str:
-    """
-    Builds a progress bar like: [■■■■■■▨□□□□□]
-    Total 12 slots. Filled = ■, partial tip = ▨, empty = □
-    """
     total_slots = 12
     filled = int(percentage / 100 * total_slots)
     partial = 1 if filled < total_slots and percentage > 0 else 0
@@ -223,35 +211,29 @@ def make_progress_bar(percentage: float) -> str:
 
 
 # ===========================================================================
-# Progress callback — async, inline edits the status message directly.
-# Attaches a 🛑 Cancel inline button carrying the task_key so it works in
-# both private chats and groups.
+# Progress callback — NEVER raises exceptions.
+#
+# KEY FIX: Pyrogram calls the progress callback from deep inside its internal
+# get_file / write loop. Raising ANY exception there (including custom ones)
+# causes Pyrogram to log an ERROR traceback and may corrupt the download
+# state. Instead, we simply return False when cancelled and let the *caller*
+# check CANCEL_TASKS after download_media returns/raises CancelledError.
 # ===========================================================================
 
 UPDATE_DELAY = 5   # seconds between progress message edits
 
 async def progress_callback(current, total, smsg, mode, start_time, task_key, file_name="", user_name=""):
     """
-    Async progress callback compatible with pyrogram's download_media /
-    send_* progress_args.
-
-    Parameters
-    ----------
-    current   : bytes transferred so far
-    total     : total bytes
-    smsg      : the status Message object to edit in-place
-    mode      : "download" | "upload"
-    start_time: time.time() when the transfer started
-    task_key  : "user_id:chat_id" string for cancel checks
-    file_name : display name for the file
-    user_name : first name of the user who triggered the task
+    Safe progress callback — returns silently on cancel (never raises).
+    Cancellation is propagated by cancelling the asyncio.Task wrapping
+    download_media, which causes it to raise asyncio.CancelledError cleanly.
     """
     if smsg is None:
         return
 
-    # Fast-path cancel check (no await needed)
+    # ── Silently return if cancelled — do NOT raise here ─────────────────
     if batch_temp.CANCEL_TASKS.get(task_key, False):
-        raise ProcessCancelled("Cancelled by user")
+        return
 
     now = time.time()
     cache_attr = f"_last_edit_{smsg.id}"
@@ -266,14 +248,10 @@ async def progress_callback(current, total, smsg, mode, start_time, task_key, fi
     eta_secs = (total - current) / speed if speed > 0 else 0
 
     bar = make_progress_bar(percentage)
-
     elapsed_str = TimeFormatter(int(diff * 1000))
     eta_str = f"{int(eta_secs)}s" if eta_secs > 0 else "-"
-
     display_name = file_name if file_name else "File"
     status_label = "Download" if mode == "download" else "Upload"
-
-    # Use provided user_name; fall back to user_id from task_key
     display_user = user_name if user_name else task_key.split(':')[0]
 
     text = (
@@ -298,13 +276,32 @@ async def progress_callback(current, total, smsg, mode, start_time, task_key, fi
 
 
 # ===========================================================================
-# Cancel callback — handles both "cancel_uid" and "cancel_uid:cid" formats
+# Internal helper — safely cancel a running download task and wait for it
+# ===========================================================================
+
+async def _kill_download_task(task_key: str):
+    """
+    Cancel the asyncio.Task registered for task_key and wait for it to finish.
+    Safe to call even if no task is registered or it's already done.
+    """
+    task = batch_temp.DOWNLOAD_TASKS.get(task_key)
+    if task and not task.done():
+        task.cancel()
+        try:
+            await asyncio.wait_for(asyncio.shield(task), timeout=5.0)
+        except (asyncio.CancelledError, asyncio.TimeoutError, Exception):
+            pass
+    batch_temp.DOWNLOAD_TASKS.pop(task_key, None)
+
+
+# ===========================================================================
+# Cancel callback — inline button handler
 # ===========================================================================
 
 @Client.on_callback_query(filters.regex(r"^cancel_"))
 async def cancel_callback(client: Client, callback_query: CallbackQuery):
-    data     = callback_query.data          # "cancel_<payload>"
-    payload  = data[len("cancel_"):]        # "<user_id>" or "<user_id>:<chat_id>"
+    data    = callback_query.data
+    payload = data[len("cancel_"):]
 
     if ":" in payload:
         user_id  = int(payload.split(":", 1)[0])
@@ -313,20 +310,19 @@ async def cancel_callback(client: Client, callback_query: CallbackQuery):
         user_id  = int(payload)
         task_key = payload
 
-    # Only the owner of the task may cancel it
     if callback_query.from_user.id != user_id:
         await callback_query.answer("⚠️ This is not your process!", show_alert=True)
         return
 
+    # Mark cancelled first, then kill the task
     batch_temp.CANCEL_TASKS[task_key] = True
-    batch_temp.IS_BATCH[task_key]     = True   # mark slot as free so next task can start
-
-    # Cancel in-flight download asyncio.Task if registered
-    task = batch_temp.DOWNLOAD_TASKS.get(task_key)
-    if task and not task.done():
-        task.cancel()
+    batch_temp.IS_BATCH[task_key]     = True
 
     await callback_query.answer("🛑 Cancelling…", show_alert=True)
+
+    # Kill in-flight download task
+    await _kill_download_task(task_key)
+
     try:
         await callback_query.message.edit_text(
             "<b>🛑 Cancellation In Progress</b>\n\n"
@@ -339,7 +335,7 @@ async def cancel_callback(client: Client, callback_query: CallbackQuery):
 
 
 # ===========================================================================
-# /start  — private + group
+# /start
 # ===========================================================================
 
 @Client.on_message(filters.command(["start"]) & filters.user(ADMINS))
@@ -386,7 +382,7 @@ async def send_start(client: Client, message: Message):
 
 
 # ===========================================================================
-# /help  — private + group
+# /help
 # ===========================================================================
 
 @Client.on_message(filters.command(["help"]) & (filters.private | filters.group))
@@ -401,7 +397,7 @@ async def send_help(client: Client, message: Message):
 
 
 # ===========================================================================
-# /plan  — private + group
+# /plan
 # ===========================================================================
 
 @Client.on_message(filters.command(["plan", "myplan", "premium"]) & (filters.private | filters.group))
@@ -420,7 +416,7 @@ async def send_plan(client: Client, message: Message):
 
 
 # ===========================================================================
-# /cancel  — private + group  (ported from Code 1)
+# /cancel  — command handler (private + group)
 # ===========================================================================
 
 @Client.on_message(filters.command(["cancel"]) & (filters.private | filters.group))
@@ -429,7 +425,6 @@ async def send_cancel(client: Client, message: Message):
     chat_id  = message.chat.id
     task_key = get_task_key(user_id, chat_id)
 
-    # If no task is running for this (user, chat) slot → nothing to cancel
     if batch_temp.IS_BATCH.get(task_key, True) is True:
         await client.send_message(
             chat_id=message.chat.id,
@@ -439,13 +434,12 @@ async def send_cancel(client: Client, message: Message):
         )
         return
 
+    # Mark cancelled and free the slot
     batch_temp.CANCEL_TASKS[task_key] = True
     batch_temp.IS_BATCH[task_key]     = True
 
-    # Cancel in-flight download asyncio.Task if registered
-    task = batch_temp.DOWNLOAD_TASKS.get(task_key)
-    if task and not task.done():
-        task.cancel()
+    # Kill in-flight download task
+    await _kill_download_task(task_key)
 
     await client.send_message(
         chat_id=message.chat.id,
@@ -460,7 +454,7 @@ async def send_cancel(client: Client, message: Message):
 
 
 # ===========================================================================
-# /setsleep  — private + group
+# /setsleep
 # ===========================================================================
 
 @Client.on_message(filters.command(["setsleep"]) & (filters.private | filters.group))
@@ -494,7 +488,7 @@ async def set_sleep(client: Client, message: Message):
 
 
 # ===========================================================================
-# /getsleep  — private + group
+# /getsleep
 # ===========================================================================
 
 @Client.on_message(filters.command(["getsleep"]) & (filters.private | filters.group))
@@ -539,7 +533,27 @@ async def settings_panel(client, callback_query):
 
 
 # ===========================================================================
-# Main save handler — private + group
+# Cleanup helper — removes temp files and optionally deletes the status msg
+# ===========================================================================
+
+async def _cleanup(temp_dir: str, file: str = None, smsg=None, delete_smsg: bool = True):
+    """Safely remove downloaded file + temp dir, optionally delete status msg."""
+    if file and os.path.exists(file):
+        try:
+            os.remove(file)
+        except Exception:
+            pass
+    if temp_dir and os.path.exists(temp_dir):
+        shutil.rmtree(temp_dir, ignore_errors=True)
+    if smsg and delete_smsg:
+        try:
+            await smsg.delete()
+        except Exception:
+            pass
+
+
+# ===========================================================================
+# Main save handler
 # ===========================================================================
 
 @Client.on_message(filters.text & (filters.private | filters.group) & ~filters.regex("^/"))
@@ -552,7 +566,6 @@ async def save(client: Client, message: Message):
     task_key  = get_task_key(user_id, chat_id)
     user_name = message.from_user.first_name or str(user_id)
 
-    # Limit check (skip in groups — limits are per-user in private chats)
     if await filters.private(None, message):
         is_limit_reached = await db.check_limit(user_id)
         if is_limit_reached:
@@ -564,7 +577,6 @@ async def save(client: Client, message: Message):
                 parse_mode=enums.ParseMode.HTML
             )
 
-    # Already processing?
     if batch_temp.IS_BATCH.get(task_key, True) is False:
         return await message.reply_text(
             "<b>⚠️ A Task is Currently Processing.</b>\n"
@@ -580,7 +592,6 @@ async def save(client: Client, message: Message):
     except Exception:
         toID = fromID
 
-    # Mark slot as busy
     batch_temp.IS_BATCH[task_key]     = False
     batch_temp.CANCEL_TASKS[task_key] = False
 
@@ -594,7 +605,7 @@ async def save(client: Client, message: Message):
     try:
         for msgid in range(fromID, toID + 1):
 
-            # ── Cancel check at top of every iteration ──────────────────
+            # ── Cancel check at top of every iteration ───────────────────
             if batch_temp.CANCEL_TASKS.get(task_key, False):
                 await client.send_message(
                     chat_id=message.chat.id,
@@ -622,7 +633,6 @@ async def save(client: Client, message: Message):
                 except Exception:
                     pass
             else:
-                # Private / restricted content needs a user session
                 user_data = await db.get_session(user_id)
                 if user_data is None:
                     await message.reply(
@@ -694,7 +704,6 @@ async def save(client: Client, message: Message):
                 except Exception:
                     pass
 
-            # Progress milestone every 5 files
             if completed > 0 and completed % 5 == 0 and completed < total_items:
                 try:
                     await client.send_message(
@@ -728,10 +737,6 @@ async def save(client: Client, message: Message):
 
 # ===========================================================================
 # handle_restricted_content
-# — Downloads, renames, adds metadata, then uploads.
-# — Uses async progress_callback with inline Cancel button.
-# — After download: edits status to "Adding Metadata…" before metadata step.
-# — After metadata:  edits status to "Uploading…" before upload step.
 # ===========================================================================
 
 async def handle_restricted_content(
@@ -746,10 +751,13 @@ async def handle_restricted_content(
     """
     Returns True on successful upload, False on skip/error.
     Raises ProcessCancelled if the user cancels mid-way.
-    """
-    user_id = message.from_user.id
 
-    # Resolve display name for the user (first name takes priority)
+    KEY FIX: download_media is wrapped in an asyncio.Task so it can be
+    cancelled cleanly via task.cancel() (triggered by /cancel or the inline
+    button). The progress callback NEVER raises — cancellation is detected
+    after download_media returns by checking CANCEL_TASKS.
+    """
+    user_id      = message.from_user.id
     display_user = user_name if user_name else (message.from_user.first_name or str(user_id))
 
     # ── Fetch source message ─────────────────────────────────────────────
@@ -803,7 +811,7 @@ async def handle_restricted_content(
 
     await db.add_traffic(user_id)
 
-    # ── Resolve display filename early for UI ────────────────────────────
+    # ── Resolve display filename ─────────────────────────────────────────
     display_name = "File"
     if msg_type == "Document" and msg.document:
         display_name = msg.document.file_name or "Document"
@@ -831,13 +839,15 @@ async def handle_restricted_content(
         parse_mode=enums.ParseMode.HTML
     )
 
-    temp_dir = f"downloads/{message.chat.id}_{message.id}_{msgid}"
+    temp_dir   = f"downloads/{message.chat.id}_{message.id}_{msgid}"
     os.makedirs(temp_dir, exist_ok=True)
-
     file       = None
     start_time = time.time()
 
     # ── DOWNLOAD ─────────────────────────────────────────────────────────
+    # Wrap in asyncio.Task so it can be cleanly cancelled from outside via
+    # task.cancel(). The progress callback only returns silently on cancel;
+    # the actual stop happens when the task receives CancelledError.
     try:
         dl_task = asyncio.create_task(
             acc.download_media(
@@ -852,40 +862,23 @@ async def handle_restricted_content(
         try:
             file = await dl_task
         except asyncio.CancelledError:
-            raise ProcessCancelled("Download task cancelled")
+            # Task was cancelled externally (by /cancel or inline button)
+            raise ProcessCancelled("Download cancelled by user")
         finally:
             batch_temp.DOWNLOAD_TASKS.pop(task_key, None)
 
     except ProcessCancelled:
-        if file and os.path.exists(file):
-            try: os.remove(file)
-            except Exception: pass
-        if os.path.exists(temp_dir):
-            shutil.rmtree(temp_dir, ignore_errors=True)
-        try: await smsg.delete()
-        except Exception: pass
+        await _cleanup(temp_dir, file, smsg)
         raise
 
     except Exception as e:
-        if os.path.exists(temp_dir):
-            shutil.rmtree(temp_dir, ignore_errors=True)
-        if "Cancelled" in str(e):
-            try: await smsg.edit("<b>❌ Task Cancelled</b>", parse_mode=enums.ParseMode.HTML)
-            except Exception: pass
-            raise ProcessCancelled(str(e))
-        try: await smsg.delete()
-        except Exception: pass
+        await _cleanup(temp_dir, file, smsg)
+        logger.error(f"Download error for msg {msgid}: {e}")
         return False
 
     # ── POST-DOWNLOAD cancel check ───────────────────────────────────────
     if batch_temp.CANCEL_TASKS.get(task_key, False):
-        if file and os.path.exists(file):
-            try: os.remove(file)
-            except Exception: pass
-        if os.path.exists(temp_dir):
-            shutil.rmtree(temp_dir, ignore_errors=True)
-        try: await smsg.delete()
-        except Exception: pass
+        await _cleanup(temp_dir, file, smsg)
         raise ProcessCancelled("Cancelled after download")
 
     # ── Filename cleanup ─────────────────────────────────────────────────
@@ -900,17 +893,13 @@ async def handle_restricted_content(
             os.rename(file, new_path)
             file = new_path
     else:
-        if os.path.exists(temp_dir):
-            shutil.rmtree(temp_dir, ignore_errors=True)
-        try: await smsg.delete()
-        except Exception: pass
+        await _cleanup(temp_dir, file, smsg)
         return False
 
-    # ── Resolve actual file size after download ──────────────────────────
     actual_size = os.path.getsize(file) if file and os.path.exists(file) else file_size
-    size_str = humanbytes(actual_size)
+    size_str    = humanbytes(actual_size)
 
-    # ── METADATA — edit progress message to show Metadata UI ─────────────
+    # ── METADATA step ────────────────────────────────────────────────────
     try:
         await smsg.edit_text(
             f"<blockquote><b>{final_filename}</b></blockquote>\n"
@@ -925,29 +914,17 @@ async def handle_restricted_content(
         pass
 
     if batch_temp.CANCEL_TASKS.get(task_key, False):
-        if file and os.path.exists(file):
-            try: os.remove(file)
-            except Exception: pass
-        if os.path.exists(temp_dir):
-            shutil.rmtree(temp_dir, ignore_errors=True)
-        try: await smsg.delete()
-        except Exception: pass
+        await _cleanup(temp_dir, file, smsg)
         raise ProcessCancelled("Cancelled before metadata")
 
     file, _ = await add_metadata_with_ffmpeg(file, final_filename)
 
     # ── POST-METADATA cancel check ───────────────────────────────────────
     if batch_temp.CANCEL_TASKS.get(task_key, False):
-        if file and os.path.exists(file):
-            try: os.remove(file)
-            except Exception: pass
-        if os.path.exists(temp_dir):
-            shutil.rmtree(temp_dir, ignore_errors=True)
-        try: await smsg.delete()
-        except Exception: pass
+        await _cleanup(temp_dir, file, smsg)
         raise ProcessCancelled("Cancelled after metadata")
 
-    # ── Edit progress message → Upload starting UI ────────────────────────
+    # ── Upload starting UI ────────────────────────────────────────────────
     try:
         await smsg.edit_text(
             f"<blockquote><b>{final_filename}</b></blockquote>\n"
@@ -964,7 +941,7 @@ async def handle_restricted_content(
     except Exception:
         pass
 
-    # ── Thumbnail resolution (priority: permanent > DB > original) ───────
+    # ── Thumbnail resolution ─────────────────────────────────────────────
     ph_path = None
 
     if PERMANENT_THUMBNAIL_URL:
@@ -1010,9 +987,10 @@ async def handle_restricted_content(
     start_time     = time.time()
 
     try:
+        if batch_temp.CANCEL_TASKS.get(task_key, False):
+            raise ProcessCancelled("Cancelled before upload")
+
         if msg_type == "Document":
-            if batch_temp.CANCEL_TASKS.get(task_key, False):
-                raise ProcessCancelled("Cancelled before upload")
             await client.send_document(
                 message.chat.id, file,
                 thumb=ph_path, caption=final_caption,
@@ -1025,8 +1003,6 @@ async def handle_restricted_content(
             upload_success = True
 
         elif msg_type == "Video":
-            if batch_temp.CANCEL_TASKS.get(task_key, False):
-                raise ProcessCancelled("Cancelled before upload")
             await client.send_video(
                 message.chat.id, file,
                 duration=msg.video.duration,
@@ -1042,8 +1018,6 @@ async def handle_restricted_content(
             upload_success = True
 
         elif msg_type == "Audio":
-            if batch_temp.CANCEL_TASKS.get(task_key, False):
-                raise ProcessCancelled("Cancelled before upload")
             await client.send_audio(
                 message.chat.id, file,
                 thumb=ph_path, caption=final_caption,
@@ -1056,8 +1030,6 @@ async def handle_restricted_content(
             upload_success = True
 
         elif msg_type == "Photo":
-            if batch_temp.CANCEL_TASKS.get(task_key, False):
-                raise ProcessCancelled("Cancelled before upload")
             await client.send_photo(
                 message.chat.id, file,
                 caption=final_caption,
@@ -1069,6 +1041,10 @@ async def handle_restricted_content(
     except ProcessCancelled:
         raise
 
+    except asyncio.CancelledError:
+        # Upload task was cancelled externally
+        raise ProcessCancelled("Upload cancelled by user")
+
     except Exception as e:
         if ERROR_MESSAGE:
             await client.send_message(
@@ -1079,12 +1055,16 @@ async def handle_restricted_content(
 
     # ── Cleanup ──────────────────────────────────────────────────────────
     if file and os.path.exists(file):
-        try: os.remove(file)
-        except Exception: pass
+        try:
+            os.remove(file)
+        except Exception:
+            pass
 
     if ph_path and PERMANENT_THUMBNAIL_URL and os.path.exists(ph_path):
-        try: os.remove(ph_path)
-        except Exception: pass
+        try:
+            os.remove(ph_path)
+        except Exception:
+            pass
 
     if os.path.exists(temp_dir):
         shutil.rmtree(temp_dir, ignore_errors=True)
@@ -1103,11 +1083,13 @@ async def handle_restricted_content(
 
 @Client.on_callback_query()
 async def button_callbacks(client: Client, callback_query: CallbackQuery):
-    # cancel_ callbacks are handled by the dedicated handler above;
-    # make sure we don't shadow them here.
     data    = callback_query.data
     message = callback_query.message
     if not message:
+        return
+
+    # cancel_ is handled by the dedicated handler above
+    if data.startswith("cancel_"):
         return
 
     if data == "dev_info":
@@ -1197,8 +1179,6 @@ async def button_callbacks(client: Client, callback_query: CallbackQuery):
         await message.delete()
 
     elif data in ["cmd_list_btn", "user_stats_btn", "dump_chat_btn", "thumb_btn", "caption_btn"]:
-        pass   # placeholders — implement as needed
+        pass   # placeholders
 
-    # Silently ignore cancel_ data here; handled by cancel_callback above
-    if not data.startswith("cancel_"):
-        await callback_query.answer()
+    await callback_query.answer()
