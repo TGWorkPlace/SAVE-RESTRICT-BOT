@@ -493,7 +493,7 @@ async def set_sleep(client: Client, message: Message):
 
 @Client.on_message(filters.command(["getsleep"]) & (filters.private | filters.group))
 async def get_sleep(client: Client, message: Message):
-    sleep_values = CUSTOM_SLEEP.get(message.from_user.id, [3, 5, 7, 10])
+    sleep_values = CUSTOM_SLEEP.get(message.from_user.id, [318, 324, 333, 338, 349, 352, 361, 367, 376, 384])
     await message.reply(
         f"**⏱️ Current Sleep Settings:**\n\n"
         f"Values: `{', '.join(map(str, sleep_values))}` seconds\n"
