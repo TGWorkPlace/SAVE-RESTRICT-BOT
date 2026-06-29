@@ -11,7 +11,10 @@ from config import API_ID, API_HASH, BOT_TOKEN, LOG_CHANNEL, ADMINS
 from database.db import db
 import log
 from log import LOGGER, setup_telegram_logging, stop_telegram_logging
+from pyrogram import utils as pyroutils
 
+pyroutils.MIN_CHAT_ID = -999999999999
+pyroutils.MIN_CHANNEL_ID = -100999999999999
 logger = LOGGER(__name__)
 IST = timezone(timedelta(hours=5, minutes=30))
 
