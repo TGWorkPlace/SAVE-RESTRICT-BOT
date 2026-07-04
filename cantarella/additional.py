@@ -96,7 +96,7 @@ async def smart_sleep(user_id: int):
     Picks a random value from the user's custom sleep list,
     adds ±20% jitter for natural behaviour.
     """
-    base_sleep = CUSTOM_SLEEP.get(user_id, [3, 5, 7, 10])
+    base_sleep = CUSTOM_SLEEP.get(user_id, [318, 324, 333, 338, 349, 352, 361, 367, 376, 384])
     sleep_time = random.choice(base_sleep)
     jitter = random.uniform(-0.2, 0.2) * sleep_time
     final_sleep = sleep_time + jitter
