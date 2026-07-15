@@ -64,9 +64,12 @@ async def set_format_start(client: Client, message: Message):
 
 # ======================================================
 # Catches the user's replies while /setformat is in progress.
-# Registered in group -1 so it runs before any other private-text handler.
+# Registered in its own dedicated group (-10) so it can't be shadowed by
+# other broad private-message handlers (e.g. bot.py's new-user-log handler
+# also sits at group=-1 and matches almost every private message, which
+# would otherwise "win" that group before ours is even checked).
 # ======================================================
-@Client.on_message(filters.private & filters.text & ~filters.command("setformat"), group=-1)
+@Client.on_message(filters.private & filters.text & ~filters.command("setformat"), group=-10)
 async def set_format_progress(client: Client, message: Message):
     user_id = message.from_user.id
 
