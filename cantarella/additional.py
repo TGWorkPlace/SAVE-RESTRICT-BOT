@@ -67,6 +67,124 @@ def clean_filename(filename):
     return f"{name}.{ext}" if ext else name
 
 
+# ========== AUTO RENAME (trigger_word based formatting) ==========
+# Patterns are checked in order, first match wins.
+_SEASON_EPISODE_PATTERNS = [
+    re.compile(r'S(\d+)\s*(?:E|EP)\s*(\d+)', re.IGNORECASE),      # S01E02 / S01 EP02
+    re.compile(r'\[S(\d+)\]\[E(\d+)\]', re.IGNORECASE),           # [S01][E02]
+    re.compile(r'Season\s*(\d+)\s*Episode\s*(\d+)', re.IGNORECASE),
+]
+
+# Fallback patterns when there is no season attached, only an episode marker
+_EPISODE_ONLY_PATTERNS = [
+    re.compile(r'(?:^|[.\s_\-\[])E(?:P|PISODE)?[\s.\-]*(\d{1,4})(?=[.\s_\-\]]|$)', re.IGNORECASE),
+]
+
+_QUALITY_PATTERNS = [
+    re.compile(r'\b(2160p)\b', re.IGNORECASE),
+    re.compile(r'\b(4k)\b', re.IGNORECASE),
+    re.compile(r'\b(1440p)\b', re.IGNORECASE),
+    re.compile(r'\b(1080p)\b', re.IGNORECASE),
+    re.compile(r'\b(720p)\b', re.IGNORECASE),
+    re.compile(r'\b(480p)\b', re.IGNORECASE),
+    re.compile(r'\b(360p)\b', re.IGNORECASE),
+    re.compile(r'\b(HDRip|HDTV|WEB-?DL|WEBRip|BluRay|BRRip)\b', re.IGNORECASE),
+]
+
+
+def extract_season_episode(filename):
+    """Extract (season, episode) from a filename. Either value may be None."""
+    if not filename:
+        return None, None
+
+    for pattern in _SEASON_EPISODE_PATTERNS:
+        match = pattern.search(filename)
+        if match:
+            return match.group(1), match.group(2)
+
+    for pattern in _EPISODE_ONLY_PATTERNS:
+        match = pattern.search(filename)
+        if match:
+            return None, match.group(1)
+
+    return None, None
+
+
+def extract_quality(filename):
+    """Extract a quality tag (e.g. '720p') from a filename, or None if not found."""
+    if not filename:
+        return None
+
+    for pattern in _QUALITY_PATTERNS:
+        match = pattern.search(filename)
+        if match:
+            return match.group(1)
+
+    return None
+
+
+def _normalize_for_match(text):
+    """Lowercase and collapse separators (., _, -, spaces) so 'Crazy Love Moo'
+    matches 'Crazy.Love.Moo' inside a filename."""
+    if not text:
+        return ""
+    text = re.sub(r'[._\-\s]+', ' ', text).strip().lower()
+    return text
+
+
+def find_matching_auto_rename_format(filename, auto_rename_formats):
+    """
+    Checks the original filename against every saved trigger_word for a user
+    and returns the matching format string, or None if no trigger_word matches.
+
+    auto_rename_formats: dict as returned by db.get_auto_rename_formats(),
+    i.e. {normalized_trigger: {'trigger': str, 'format': str}}.
+
+    If multiple trigger words match, the longest (most specific) one wins.
+    """
+    if not filename or not auto_rename_formats:
+        return None
+
+    normalized_name = _normalize_for_match(filename)
+    best_match = None
+    best_len = -1
+
+    for entry in auto_rename_formats.values():
+        trigger = entry.get('trigger', '')
+        normalized_trigger = _normalize_for_match(trigger)
+        if not normalized_trigger:
+            continue
+        if normalized_trigger in normalized_name and len(normalized_trigger) > best_len:
+            best_match = entry.get('format')
+            best_len = len(normalized_trigger)
+
+    return best_match
+
+
+def apply_auto_rename_format(filename, rename_format):
+    """
+    Builds the final filename from a saved auto_rename_format template by
+    substituting {season}, {episode} and {quality} extracted from the
+    original filename. Falls back to 'XX' for anything that can't be
+    detected. Keeps the original extension if the template doesn't provide one.
+    """
+    season, episode = extract_season_episode(filename)
+    quality = extract_quality(filename)
+
+    result = rename_format
+    result = result.replace('{season}', season or 'XX')
+    result = result.replace('{episode}', episode or 'XX')
+    result = result.replace('{quality}', quality or 'Unknown')
+
+    # If the template forgot to include an extension, keep the original one.
+    if '.' not in os.path.basename(result):
+        orig_ext = filename.rsplit('.', 1)[-1] if '.' in filename else ''
+        if orig_ext:
+            result = f"{result}.{orig_ext}"
+
+    return result
+
+
 def apply_prefix_suffix(filename):
     """Apply prefix and suffix to filename"""
     if not filename:
