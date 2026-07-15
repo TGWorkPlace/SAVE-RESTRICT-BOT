@@ -211,6 +211,29 @@ class Bot(Client):
             BotCommand("rem_del_word", "Remove delete word"),
             BotCommand("set_repl_word", "Add replace word"),
             BotCommand("rem_repl_word", "Remove replace word"),
+            # --- Auto Rename (trigger_word -> format) ---
+            BotCommand("setformat", "Set an auto rename format"),
+            BotCommand("seeformat", "View saved auto rename formats"),
+            BotCommand("delformat", "Delete an auto rename format"),
+            # --- Settings / misc user commands ---
+            BotCommand("settings", "View bot settings"),
+            BotCommand("commands", "List all commands"),
+            BotCommand("thumb_mode", "Toggle thumbnail mode"),
+            BotCommand("setsleep", "Set batch sleep interval"),
+            BotCommand("getsleep", "View batch sleep interval"),
+            # --- Admin-only commands ---
+            BotCommand("ban", "[Admin] Ban a user"),
+            BotCommand("unban", "[Admin] Unban a user"),
+            BotCommand("set_dump", "[Admin] Set dump chat"),
+            BotCommand("dblink", "[Admin] Get DB link"),
+            BotCommand("add_unsubscribe", "[Admin] Add unsubscribe entry"),
+            BotCommand("del_unsubscribe", "[Admin] Remove unsubscribe entry"),
+            BotCommand("broadcast", "[Admin] Broadcast a message"),
+            BotCommand("users", "[Admin] View total users"),
+            BotCommand("add_premium", "[Admin] Grant premium"),
+            BotCommand("remove_premium", "[Admin] Revoke premium"),
+            BotCommand("restart", "[Admin] Restart the bot"),
+            BotCommand("cmd", "[Admin] Refresh commands menu"),
         ]
         await self.set_bot_commands(commands)
 
