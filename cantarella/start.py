@@ -28,6 +28,8 @@ from cantarella.additional import (
     add_metadata_with_ffmpeg,
     PERMANENT_THUMBNAIL_URL,
     CUSTOM_SLEEP,
+    find_matching_auto_rename_format,
+    apply_auto_rename_format,
 )
 
 logger = LOGGER(__name__)
@@ -881,12 +883,24 @@ async def handle_restricted_content(
         await _cleanup(temp_dir, file, smsg)
         raise ProcessCancelled("Cancelled after download")
 
-    # ── Filename cleanup ─────────────────────────────────────────────────
+    # ── Filename cleanup / Auto Rename ────────────────────────────────────
     if file and os.path.exists(file):
-        old_filename   = os.path.basename(file)
-        dir_name       = os.path.dirname(file)
-        cleaned        = clean_filename(old_filename)
-        final_filename = apply_prefix_suffix(cleaned)
+        old_filename = os.path.basename(file)
+        dir_name     = os.path.dirname(file)
+
+        # 1. Check the user's saved trigger_word -> auto_rename_format list.
+        auto_rename_formats = await db.get_auto_rename_formats(user_id)
+        matched_format = find_matching_auto_rename_format(old_filename, auto_rename_formats)
+
+        if matched_format:
+            # A trigger_word matched: use that format (season/episode/quality
+            # detected from the original filename), same metadata step as usual.
+            final_filename = apply_auto_rename_format(old_filename, matched_format)
+        else:
+            # 2. No trigger_word matched: fall back to the default
+            # clean_filename + prefix/suffix behaviour from additional.py.
+            cleaned        = clean_filename(old_filename)
+            final_filename = apply_prefix_suffix(cleaned)
 
         if old_filename != final_filename:
             new_path = os.path.join(dir_name, final_filename)
