@@ -120,6 +120,38 @@ class Database:
             current_repl.pop(w, None)
         await self.col.update_one({'id': int(id)}, {'$set': {'replace_words': current_repl}})
     # --------------------------------------------------------
+    # Auto Rename Formats (trigger_word -> auto_rename_format)
+    # --------------------------------------------------------
+    async def set_auto_rename_format(self, id, trigger_word, rename_format):
+        """
+        Saves/updates a trigger_word -> rename_format mapping for a user.
+        Stored keyed by the normalized (lowercase) trigger word for cheap
+        lookups, while the original casing is kept for display.
+        """
+        key = trigger_word.strip().lower()
+        entry = {'trigger': trigger_word.strip(), 'format': rename_format.strip()}
+        await self.col.update_one(
+            {'id': int(id)},
+            {'$set': {f'auto_rename_formats.{key}': entry}}
+        )
+    async def get_auto_rename_formats(self, id):
+        """Returns dict {normalized_trigger: {'trigger': ..., 'format': ...}}"""
+        user = await self.col.find_one({'id': int(id)})
+        if not user:
+            return {}
+        return user.get('auto_rename_formats', {}) or {}
+    async def delete_auto_rename_format(self, id, trigger_word):
+        key = trigger_word.strip().lower()
+        user = await self.col.find_one({'id': int(id)})
+        formats = (user or {}).get('auto_rename_formats', {}) or {}
+        existed = key in formats
+        if existed:
+            await self.col.update_one(
+                {'id': int(id)},
+                {'$unset': {f'auto_rename_formats.{key}': ""}}
+            )
+        return existed
+    # --------------------------------------------------------
     # NEW FEATURES: Daily Limits (Free User Restriction)
     # --------------------------------------------------------
     async def check_limit(self, id):
