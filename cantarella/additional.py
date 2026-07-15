@@ -81,13 +81,9 @@ _EPISODE_ONLY_PATTERNS = [
 ]
 
 _QUALITY_PATTERNS = [
-    re.compile(r'\b(2160p)\b', re.IGNORECASE),
-    re.compile(r'\b(4k)\b', re.IGNORECASE),
-    re.compile(r'\b(1440p)\b', re.IGNORECASE),
-    re.compile(r'\b(1080p)\b', re.IGNORECASE),
-    re.compile(r'\b(720p)\b', re.IGNORECASE),
-    re.compile(r'\b(480p)\b', re.IGNORECASE),
-    re.compile(r'\b(360p)\b', re.IGNORECASE),
+    re.compile(r'\b(4k|2160p)\b', re.IGNORECASE),
+    re.compile(r'\b(2k|1440p)\b', re.IGNORECASE),
+    re.compile(r'\b(\d{3,4}[pi])\b', re.IGNORECASE),              # 1080p, 720p, 540p, 480i, ...
     re.compile(r'\b(HDRip|HDTV|WEB-?DL|WEBRip|BluRay|BRRip)\b', re.IGNORECASE),
 ]
 
