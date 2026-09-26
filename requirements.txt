@@ -1,6 +1,5 @@
 # --- Telegram & Bot Frameworks ---
-pyrofork==2.3.45
-TgCrypto
+wzgram[fast]
 
 # --- Asynchronous & Networking ---
 aiohttp==3.9.5
