@@ -10,7 +10,7 @@
 
 FROM mwader/static-ffmpeg:7.0 AS ffmpeg
 
-FROM python:3.10.13-slim-bullseye
+FROM python:3.11-slim-bullseye
 
 # Prevent Python from creating .pyc files
 ENV PYTHONDONTWRITEBYTECODE=1
